@@ -33,12 +33,12 @@ jobs:
         python -m pip install --upgrade pip
         pip install pyinstaller PyQt6 pandas openpyxl requests
 
-    - name: Run PyInstaller Builder Matrix
+    - name: Run PyInstaller Builder Matrix with Branding
       run: |
         if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          pyinstaller --onefile --noconsole --name="TimeVehicle 1.0" user-input-data.py
+          pyinstaller --onefile --noconsole --icon="icon.ico" --name="TimeVehicle 1.0" user-input-data.py
         elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-          pyinstaller --onefile --windowed --name="TimeVehicle 1.0" user-input-data.py
+          pyinstaller --onefile --windowed --icon="icon.icns" --name="TimeVehicle 1.0" user-input-data.py
         elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
           pyinstaller --onefile --name="TimeVehicle-1.0-linux" user-input-data.py
         fi
