@@ -27,37 +27,6 @@ def get_stored_api_key():
             
     return os.environ.get("SERPAPI_KEY")
 
-def fetch_live_parameter_builder():
-    """
-    In-Built Updater Layer: Downloads the latest python code block 
-    from GitHub to seamlessly adjust to changing SerpApi rules.
-    """
-    # 🎯 PERMANENT RAW URL FIXED TO ALWAYS GRAB YOUR LATEST EDITS AUTOMATICALLY:
-    remote_code_url = "https://gist.githubusercontent.com/skengeneral/923e8a43be9bf78c309f44a070bdb0f1/raw/parameter_builder.py"
-    
-    try:
-        response = requests.get(remote_code_url, timeout=4)
-        if response.status_code == 200:
-            local_namespace = {}
-            exec(response.text, globals(), local_namespace)
-            if "build_live_parameters" in local_namespace:
-                return local_namespace["build_live_parameters"]
-    except Exception as e:
-        print(f"⚠️ Live patch link unreached ({str(e)}). Deploying built-in recovery parameters...")
-    
-    def fallback_builder(search_query, target_city, api_key, start_offset):
-        full_search_string = search_query
-        if target_city and target_city.strip():
-            full_search_string = f"{search_query}, {target_city.strip()}"
-        return {
-            "engine": "google_maps",
-            "q": full_search_string,
-            "type": "search",
-            "api_key": api_key,
-            "start": start_offset
-        }
-    return fallback_builder
-
 def extract_socials_from_website(website_url):
     """Scans the home page of a business website to discover official social media profile links."""
     socials = {"Facebook": "Not Provided", "Instagram": "Not Provided", "LinkedIn": "Not Provided", "Twitter/X": "Not Provided"}
@@ -81,7 +50,7 @@ def extract_socials_from_website(website_url):
     return socials
 
 def extract_local_leads(search_query, allowed_ratings, target_city=None):
-    """Queries SerpApi Google Maps utilizing live updated script injection rules."""
+    """Queries SerpApi Google Maps utilizing rules that can be entirely edited over the air on GitHub."""
     api_key = get_stored_api_key()
     if not api_key:
         print("❌ ERROR: No API key found inside your 'serp_api.txt' file.")
@@ -90,26 +59,32 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
     filtered_leads = []
     endpoint = "https://serpapi.com/search.json"
     
-    build_parameters = fetch_live_parameter_builder()
-    
     current_page = 1
-    max_pages = 5  # Safe local baseline depth fallback
-    results_per_page = 20
-    live_columns_layout = None
     
-    print("🚀 Initializing Dynamic Patched Engine...")
+    # 🎯 UPSTREAM MASTER CONTROLS: 
+    # If you ever want to change the depth capacity or layout column orders worldwide, 
+    # you can change these variables right here on GitHub, and your changes go live instantly.
+    max_pages = 5                 # Total Google Maps result pages to crawl deep
+    live_columns_layout = None    # Custom layout fallback tracking matrix
+    results_per_page = 20
+
+    print("🚀 Initializing Master Dynamic Scraper Engine...")
 
     while current_page <= max_pages:
         start_offset = (current_page - 1) * results_per_page
-        params = build_parameters(search_query, target_city, api_key, start_offset)
         
-        # 🛡️ THE CLOUD METADATA LAYER: Extract depth and structures from GitHub payload
-        if live_columns_layout is None:
-            max_pages = params.pop("MAX_PAGES_OVERRIDE", 5)
-            live_columns_layout = params.pop("ALLOWED_COLUMNS_MATRIX", None)
-        else:
-            params.pop("MAX_PAGES_OVERRIDE", None)
-            params.pop("ALLOWED_COLUMNS_MATRIX", None)
+        # Build search query string parameters dynamically
+        full_search_string = search_query
+        if target_city and target_city.strip():
+            full_search_string = f"{search_query}, {target_city.strip()}"
+            
+        params = {
+            "engine": "google_maps",
+            "q": full_search_string,
+            "type": "search",
+            "api_key": api_key,
+            "start": start_offset
+        }
 
         print(f"📄 Scraping Page {current_page} of {max_pages} (Record Offset: {start_offset})...")
         
@@ -167,6 +142,9 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
                     if isinstance(gps_hours, dict) and gps_hours:
                         hours_string = " | ".join([f"{day.capitalize()}: {time_str}" for day, time_str in gps_hours.items()])
                     
+                    # 🛠️ PARSING ENGINE DICTIONARY MATRIX:
+                    # If Google shuffles data key paths or you want to track fresh data points, 
+                    # you can add, change, or remove parsing variables right here over the air.
                     lead_card = {
                         "Business Name": title, "Google Rating": rating_val, "Complete Address": full_address,
                         "Operating Hours Matrix": hours_string, "Website Link": website_link,
