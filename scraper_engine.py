@@ -27,9 +27,15 @@ def get_stored_api_key():
             
     return os.environ.get("SERPAPI_KEY")
 
-def extract_socials_from_website(website_url):
-    """Scans the home page of a business website to discover official social media profile links."""
-    socials = {"Facebook": "Not Provided", "Instagram": "Not Provided", "LinkedIn": "Not Provided", "Twitter/X": "Not Provided"}
+def extract_contact_metrics_from_website(website_url):
+    """Scans the home page of a business website to discover official social media profile links AND email IDs."""
+    socials = {
+        "Facebook": "Not Provided", 
+        "Instagram": "Not Provided", 
+        "LinkedIn": "Not Provided", 
+        "Twitter/X": "Not Provided",
+        "Email ID": "Not Provided"
+    }
     if not website_url or "No Website" in website_url or not website_url.startswith("http"):
         return socials
     try:
@@ -37,10 +43,24 @@ def extract_socials_from_website(website_url):
         response = requests.get(website_url, headers=headers, timeout=5)
         if response.status_code == 200:
             html_content = response.text
+            
+            # --- EMAIL EXTRACTION ENGINE ---
+            # Standard email format checker
+            email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}'
+            raw_emails = re.findall(email_pattern, html_content)
+            
+            if raw_emails:
+                # Filter out asset false-positives (e.g. logo@2x.png)
+                clean_emails = [e for e in raw_emails if not e.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'))]
+                if clean_emails:
+                    socials["Email ID"] = clean_emails[0].lower()
+            
+            # Social media matching logic
             fb_match = re.search(r'href=["\'](https?://(?:www\.)?facebook\.com/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
             ig_match = re.search(r'href=["\'](https?://(?:www\.)?instagram\.com/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
             li_match = re.search(r'href=["\'](https?://(?:www\.)?linkedin\.com/(?:in|company)/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
             tw_match = re.search(r'href=["\'](https?://(?:www\.)?(?:twitter|x)\.com/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
+            
             if fb_match: socials["Facebook"] = fb_match.group(1)
             if ig_match: socials["Instagram"] = ig_match.group(1)
             if li_match: socials["LinkedIn"] = li_match.group(1)
@@ -62,8 +82,6 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
     current_page = 1
     
     # 🎯 UPSTREAM MASTER CONTROLS: 
-    # If you ever want to change the depth capacity or layout column orders worldwide, 
-    # you can change these variables right here on GitHub, and your changes go live instantly.
     max_pages = 5                 # Total Google Maps result pages to crawl deep
     live_columns_layout = None    # Custom layout fallback tracking matrix
     results_per_page = 20
@@ -124,18 +142,9 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
                 if rating_matches:
                     full_address = biz.get("address", "") or "Not Provided"
                     website_link = biz.get("website") or "No Website"
-                    found_socials = {"Facebook": "Not Provided", "Instagram": "Not Provided", "LinkedIn": "Not Provided", "Twitter/X": "Not Provided"}
                     
-                    native_links = biz.get("links", {})
-                    if isinstance(native_links, dict):
-                        for platform, link in native_links.items():
-                            if "facebook" in platform.lower(): found_socials["Facebook"] = link
-                            elif "instagram" in platform.lower(): found_socials["Instagram"] = link
-                            elif "linkedin" in platform.lower(): found_socials["LinkedIn"] = link
-                            elif "twitter" in platform.lower() or "x.com" in platform.lower(): found_socials["Twitter/X"] = link
-                    
-                    if all(v == "Not Provided" for v in found_socials.values()):
-                        found_socials = extract_socials_from_website(website_link)
+                    # Run deep scraper to fetch socials and email metrics
+                    found_metrics = extract_contact_metrics_from_website(website_link)
                     
                     gps_hours = biz.get("operating_hours", {})
                     hours_string = "Not Provided"
@@ -143,15 +152,19 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
                         hours_string = " | ".join([f"{day.capitalize()}: {time_str}" for day, time_str in gps_hours.items()])
                     
                     # 🛠️ PARSING ENGINE DICTIONARY MATRIX:
-                    # If Google shuffles data key paths or you want to track fresh data points, 
-                    # you can add, change, or remove parsing variables right here over the air.
                     lead_card = {
-                        "Business Name": title, "Google Rating": rating_val, "Complete Address": full_address,
-                        "Operating Hours Matrix": hours_string, "Website Link": website_link,
+                        "Business Name": title, 
+                        "Email ID": found_metrics["Email ID"], # <-- Captured and exported directly
+                        "Google Rating": rating_val, 
+                        "Complete Address": full_address,
+                        "Operating Hours Matrix": hours_string, 
+                        "Website Link": website_link,
                         "Phone Number": biz.get("phone") or "Not Provided",
                         "Google Plus Code": biz.get("gps_coordinates", {}).get("plus_code") or "Not Provided",
-                        "Facebook Handle": found_socials["Facebook"], "Instagram Handle": found_socials["Instagram"],
-                        "LinkedIn Handle": found_socials["LinkedIn"], "Twitter/X Handle": found_socials["Twitter/X"]
+                        "Facebook Handle": found_metrics["Facebook"], 
+                        "Instagram Handle": found_metrics["Instagram"],
+                        "LinkedIn Handle": found_metrics["LinkedIn"], 
+                        "Twitter/X Handle": found_metrics["Twitter/X"]
                     }
                     filtered_leads.append(lead_card)
             
