@@ -4,20 +4,18 @@ import requests
 import time
 import re
 from pathlib import Path
+from urllib.parse import urljoin
 
 def get_stored_api_key():
     """Reads the SerpApi key from the text file right next to the executable bundle."""
-    # 🔍 DYNAMIC MULTI-OS PATH DETECTOR (Fixes Mac .app Bundle isolation layer)
     if getattr(sys, 'frozen', False):
         current_dir = Path(sys.executable).parent
-        # If running inside a macOS bundle container, jump out to the visible folder level
         if "Contents/MacOS" in str(current_dir):
             current_dir = current_dir.parent.parent.parent
     else:
         current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
         
     key_file_path = current_dir / "serp_api.txt"
-    
     if key_file_path.exists():
         try:
             with open(key_file_path, "r", encoding="utf-8") as file:
@@ -27,44 +25,74 @@ def get_stored_api_key():
             
     return os.environ.get("SERPAPI_KEY")
 
+def extract_emails_from_html(html_text):
+    """Helper macro to parse and clean raw email targets from standard string text markup."""
+    email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}'
+    raw_emails = re.findall(email_pattern, html_text)
+    if raw_emails:
+        clean_emails = [e for e in raw_emails if not e.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'))]
+        if clean_emails:
+            return clean_emails[0].lower()
+    return None
+
 def extract_contact_metrics_from_website(website_url):
-    """Scans the home page of a business website to discover official social media profile links AND email IDs."""
+    """Scans the home page AND primary contact links of a business to catch hidden email IDs."""
     socials = {
-        "Facebook": "Not Provided", 
-        "Instagram": "Not Provided", 
-        "LinkedIn": "Not Provided", 
-        "Twitter/X": "Not Provided",
+        "Facebook": "Not Provided", "Instagram": "Not Provided", 
+        "LinkedIn": "Not Provided", "Twitter/X": "Not Provided",
         "Email ID": "Not Provided"
     }
     if not website_url or "No Website" in website_url or not website_url.startswith("http"):
         return socials
+        
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         response = requests.get(website_url, headers=headers, timeout=5)
-        if response.status_code == 200:
-            html_content = response.text
+        if response.status_code != 200:
+            return socials
             
-            # --- EMAIL EXTRACTION ENGINE ---
-            # Standard email format checker
-            email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}'
-            raw_emails = re.findall(email_pattern, html_content)
+        html_content = response.text
+        
+        # 1. Look for email on the primary homepage first
+        found_email = extract_emails_from_html(html_content)
+        if found_email:
+            socials["Email ID"] = found_email
             
-            if raw_emails:
-                # Filter out asset false-positives (e.g. logo@2x.png)
-                clean_emails = [e for e in raw_emails if not e.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'))]
-                if clean_emails:
-                    socials["Email ID"] = clean_emails[0].lower()
+        # 2. Extract Social media anchors from homepage
+        fb_match = re.search(r'href=["\'](https?://(?:www\.)?facebook\.com/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
+        ig_match = re.search(r'href=["\'](https?://(?:www\.)?instagram\.com/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
+        li_match = re.search(r'href=["\'](https?://(?:www\.)?linkedin\.com/(?:in|company)/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
+        tw_match = re.search(r'href=["\'](https?://(?:www\.)?(?:twitter|x)\.com/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
+        
+        if fb_match: socials["Facebook"] = fb_match.group(1)
+        if ig_match: socials["Instagram"] = ig_match.group(1)
+        if li_match: socials["LinkedIn"] = li_match.group(1)
+        if tw_match: socials["Twitter/X"] = tw_match.group(1)
+        
+        # 3. DEEP CRAWLER: If no email was found on homepage, search for secondary contact pages
+        if socials["Email ID"] == "Not Provided":
+            # Match internal links pointing to Contact, About, or Registration pages
+            contact_links = re.findall(r'href=["\']([^"\']*(?:contact|about|register|info|reach)[^"\']*)["\']', html_content, re.IGNORECASE)
             
-            # Social media matching logic
-            fb_match = re.search(r'href=["\'](https?://(?:www\.)?facebook\.com/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
-            ig_match = re.search(r'href=["\'](https?://(?:www\.)?instagram\.com/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
-            li_match = re.search(r'href=["\'](https?://(?:www\.)?linkedin\.com/(?:in|company)/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
-            tw_match = re.search(r'href=["\'](https?://(?:www\.)?(?:twitter|x)\.com/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
-            
-            if fb_match: socials["Facebook"] = fb_match.group(1)
-            if ig_match: socials["Instagram"] = ig_match.group(1)
-            if li_match: socials["LinkedIn"] = li_match.group(1)
-            if tw_match: socials["Twitter/X"] = tw_match.group(1)
+            # Filter and scan the unique contact sub-pages found
+            processed_subpages = set()
+            for link in contact_links:
+                # Resolve relative URLs (e.g. "/contact-us" becomes "https://site.com/contact-us")
+                full_subpage_url = urljoin(website_url, link)
+                
+                # Stay on the same root website domain for safety
+                if full_subpage_url.startswith(website_url) and full_subpage_url not in processed_subpages:
+                    processed_subpages.add(full_subpage_url)
+                    try:
+                        sub_resp = requests.get(full_subpage_url, headers=headers, timeout=4)
+                        if sub_resp.status_code == 200:
+                            sub_email = extract_emails_from_html(sub_resp.text)
+                            if sub_email:
+                                socials["Email ID"] = sub_email
+                                break # Found it! Stop crawling further sub-pages
+                    except:
+                        continue
+                        
     except:
         pass
     return socials
@@ -78,20 +106,15 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
         
     filtered_leads = []
     endpoint = "https://serpapi.com/search.json"
-    
     current_page = 1
-    
-    # 🎯 UPSTREAM MASTER CONTROLS: 
-    max_pages = 5                 # Total Google Maps result pages to crawl deep
-    live_columns_layout = None    # Custom layout fallback tracking matrix
+    max_pages = 5                 
+    live_columns_layout = None    
     results_per_page = 20
 
     print("🚀 Initializing Master Dynamic Scraper Engine...")
 
     while current_page <= max_pages:
         start_offset = (current_page - 1) * results_per_page
-        
-        # Build search query string parameters dynamically
         full_search_string = search_query
         if target_city and target_city.strip():
             full_search_string = f"{search_query}, {target_city.strip()}"
@@ -143,7 +166,6 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
                     full_address = biz.get("address", "") or "Not Provided"
                     website_link = biz.get("website") or "No Website"
                     
-                    # Run deep scraper to fetch socials and email metrics
                     found_metrics = extract_contact_metrics_from_website(website_link)
                     
                     gps_hours = biz.get("operating_hours", {})
@@ -151,16 +173,14 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
                     if isinstance(gps_hours, dict) and gps_hours:
                         hours_string = " | ".join([f"{day.capitalize()}: {time_str}" for day, time_str in gps_hours.items()])
                     
-                    # 🛠️ PARSING ENGINE DICTIONARY MATRIX:
                     lead_card = {
                         "Business Name": title, 
-                        "Email ID": found_metrics["Email ID"], # <-- Captured and exported directly
                         "Google Rating": rating_val, 
                         "Complete Address": full_address,
                         "Operating Hours Matrix": hours_string, 
                         "Website Link": website_link,
+                        "Email ID": found_metrics["Email ID"],
                         "Phone Number": biz.get("phone") or "Not Provided",
-                        "Google Plus Code": biz.get("gps_coordinates", {}).get("plus_code") or "Not Provided",
                         "Facebook Handle": found_metrics["Facebook"], 
                         "Instagram Handle": found_metrics["Instagram"],
                         "LinkedIn Handle": found_metrics["LinkedIn"], 
@@ -168,28 +188,19 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
                     }
                     filtered_leads.append(lead_card)
             
-            # 🔄 ADVANCED MULTI-TOKEN MAPS PAGINATION TRACKER
             serp_pagination = data.get("serpapi_pagination", {})
-            has_next_indicator = (
-                "next" in serp_pagination or 
-                "next_page_token" in serp_pagination or 
-                "next_page_token" in data
-            )
+            has_next_indicator = ("next" in serp_pagination or "next_page_token" in serp_pagination or "next_page_token" in data)
             
             if not has_next_indicator:
                 print("🏁 Google Maps indicates no more pages exist for this keyword framework.")
                 break
                 
             current_page += 1
-            time.sleep(1.2) # Friendly pacing delay to stabilize scrapers
+            time.sleep(1.2)
             
         except Exception as e:
             print(f"❌ Extraction anomaly: {str(e)}")
             break
 
     print(f"🎉 Complete! Successfully extracted {len(filtered_leads)} leads.")
-    
-    return {
-        "data": filtered_leads,
-        "columns_layout": live_columns_layout
-    }
+    return {"data": filtered_leads, "columns_layout": live_columns_layout}
