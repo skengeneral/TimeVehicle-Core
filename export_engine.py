@@ -11,16 +11,15 @@ def save_to_excel(data_cards, custom_columns=None):
     if not data_cards:
         return "No Data"
 
-    # 📋 If GitHub provided a live layout list over the air, use it. 
-    # Otherwise, fall back to the default fallback settings.
+    # --- UPDATED: Added Email ID and completely removed Google Plus Code ---
     columns_structure = custom_columns if custom_columns else [
         "Business Name",
         "Google Rating",
         "Complete Address",
         "Operating Hours Matrix",
         "Website Link",
+        "Email ID",
         "Phone Number",
-        "Google Plus Code",
         "Facebook Handle",
         "Instagram Handle",
         "LinkedIn Handle",
@@ -35,26 +34,22 @@ def save_to_excel(data_cards, custom_columns=None):
 
     df = pd.DataFrame(rows, columns=columns_structure)
 
-    # 🍏🐧 CROSS-PLATFORM SAVE LOCATION PATH DETECTOR
-    # This automatically finds the user's desktop on Windows, Mac, or Linux
+    # CROSS-PLATFORM SAVE LOCATION PATH DETECTOR
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"timevehicle1.0_Export_{timestamp}.xlsx"
     
     desktop_dir = Path.home() / "Desktop"
     
-    # Check if the Desktop folder exists, otherwise fallback safely to the User's Home folder
     if desktop_dir.exists():
         output_filepath = desktop_dir / filename
     else:
         output_filepath = Path.home() / filename
     
     try:
-        # Save out cleanly using pandas engine using the absolute string path
         df.to_excel(str(output_filepath), index=False)
         return os.path.abspath(str(output_filepath))
     except Exception as e:
         print(f"❌ Excel engine generation error: {str(e)}")
-        # Ultimate emergency local folder fallback execution
         try:
             df.to_excel(filename, index=False)
             return os.path.abspath(filename)
