@@ -1,4 +1,5 @@
 import os
+import sys
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +12,7 @@ def save_to_excel(data_cards, custom_columns=None):
     if not data_cards:
         return "No Data"
 
-    # --- UPDATED: Added Email ID and completely removed Google Plus Code ---
+    # --- Dynamic structural configuration mapping ---
     columns_structure = custom_columns if custom_columns else [
         "Business Name",
         "Google Rating",
@@ -34,16 +35,17 @@ def save_to_excel(data_cards, custom_columns=None):
 
     df = pd.DataFrame(rows, columns=columns_structure)
 
-    # CROSS-PLATFORM SAVE LOCATION PATH DETECTOR
+    # 🟢 FIXED: CROSS-PLATFORM PATH DETECTOR (Targets executable runtime workspace)
+    if getattr(sys, 'frozen', False):
+        # If running inside a bundled PyInstaller standalone .exe file
+        output_dir = Path(sys.executable).parent
+    else:
+        # Fallback tracking if running locally as a raw .py development script
+        output_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"timevehicle1.0_Export_{timestamp}.xlsx"
-    
-    desktop_dir = Path.home() / "Desktop"
-    
-    if desktop_dir.exists():
-        output_filepath = desktop_dir / filename
-    else:
-        output_filepath = Path.home() / filename
+    output_filepath = output_dir / filename
     
     try:
         df.to_excel(str(output_filepath), index=False)
@@ -51,6 +53,7 @@ def save_to_excel(data_cards, custom_columns=None):
     except Exception as e:
         print(f"❌ Excel engine generation error: {str(e)}")
         try:
+            # Absolute recovery fallback to standard execution loop string
             df.to_excel(filename, index=False)
             return os.path.abspath(filename)
         except:
