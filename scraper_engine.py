@@ -10,7 +10,6 @@ from urllib.parse import urljoin, urlparse
 from playwright.sync_api import sync_playwright
 
 def get_local_api_key():
-    """Maps to the identical caller inside user-input-data to avoid sandboxed execution breaks."""
     if getattr(sys, 'frozen', False):
         current_dir = Path(sys.executable).parent
     else:
@@ -24,11 +23,10 @@ def get_local_api_key():
     return os.environ.get("SERPAPI_KEY")
 
 def get_stored_api_key():
-    """Fallback alias link to catch legacy memory requests safely."""
+    """Maps directly to local loader to handle dynamic cross-calls flawlessly."""
     return get_local_api_key()
 
 def extract_emails_from_text(text_content):
-    """Parses text segments using clean regular expressions to harvest target emails."""
     if not text_content:
         return None
     email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}'
@@ -53,17 +51,13 @@ def extract_emails_from_text(text_content):
     return None
 
 def fetch_email_via_google_search(api_key, business_name, full_address=None, target_city=None):
-    """Executes a multi-stage search fallback using both the live address and dashboard entries."""
     endpoint = "https://serpapi.com/search.json"
-    
-    # Strategy A: Try building a hyper-targeted query using the exact address
     geo_tail = ""
     if full_address and full_address != "Not Provided":
         address_parts = [p.strip() for p in full_address.split(',')]
         if len(address_parts) >= 2:
             geo_tail = f"{address_parts[-2]}, {address_parts[-1]}"
             
-    # Strategy B: Fallback to whatever the user typed in the dashboard fields if address parsing is thin
     if not geo_tail and target_city:
         geo_tail = target_city.strip()
         
@@ -71,21 +65,17 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None, tar
         geo_tail = "USA"
         
     search_query = f"{business_name}, {geo_tail} email id"
-    print(f"🔍 Executing Smart Fallback Search: '{search_query}'...")
     
     params = {"engine": "google", "q": search_query, "api_key": api_key}
     try:
         response = requests.get(endpoint, params=params, timeout=15)
         if response.status_code == 200:
             data = response.json()
-            
-            # Check AI Overview / Answer Box first
             answer_box = data.get("answer_box", {})
             answer_text = str(answer_box.get("answer") or answer_box.get("snippet") or "")
             found = extract_emails_from_text(answer_text)
             if found: return found
                 
-            # Check regular organic snippet summaries second
             organic_results = data.get("organic_results", [])
             for result in organic_results[:4]:
                 found = extract_emails_from_text(result.get("snippet", ""))
@@ -173,18 +163,15 @@ def extract_contact_metrics_from_website(playwright_instance, website_url):
 def extract_local_leads(search_query, allowed_ratings, target_city=None):
     api_key = get_local_api_key()
     if not api_key:
-        print("❌ ERROR: No API key found inside your 'serp_api.txt' file.")
+        print("❌ ERROR: No API key found.")
         return {"data": [], "columns_layout": None}
         
     filtered_leads = []
     processed_titles = set()
-    
     endpoint = "https://serpapi.com/search.json"
     current_page = 1
     max_pages = 5                  
     results_per_page = 20
-
-    print("🚀 Initializing Master Automation Scraper Engine...")
 
     with sync_playwright() as p:
         while current_page <= max_pages:
@@ -201,20 +188,16 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
                 "start": start_offset
             }
 
-            print(f"\n📄 Scraping Page {current_page} of {max_pages}...")
             try:
                 response = requests.get(endpoint, params=params, timeout=20)
                 if response.status_code != 200: break
-                    
                 data = response.json()
                 raw_results = data.get("local_results", [])
                 if not raw_results: break
                     
                 for biz in raw_results:
                     title = biz.get("title") or biz.get("name") or "Unknown Firm"
-                    
-                    if title.lower().strip() in processed_titles:
-                        continue
+                    if title.lower().strip() in processed_titles: continue
                         
                     raw_rating = biz.get("rating", 0)
                     try: rating_val = float(raw_rating)
@@ -240,23 +223,11 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
                         website_link = biz.get("website") or "No Website"
                         full_address = biz.get("address", "") or "Not Provided"
                         
-                        # Step 1: Standard website browser crawl
                         found_metrics = extract_contact_metrics_from_website(p, website_link)
-                        
                         email_id = found_metrics["Email ID"]
-                        fb_id = found_metrics["Facebook"]
-                        ig_id = found_metrics["Instagram"]
-                        li_id = found_metrics["LinkedIn"]
-                        tw_id = found_metrics["Twitter/X"]
                         
-                        # Step 2: Multi-Layer Google Search Fallback Engine for Email ONLY
                         if email_id == "Not Provided":
                             email_id = fetch_email_via_google_search(api_key, title, full_address, target_city)
-                        
-                        if fb_id == "Not Provided": fb_id = "Not Provided"
-                        if ig_id == "Not Provided": ig_id = "Not Provided"
-                        if li_id == "Not Provided": li_id = "Not Provided"
-                        if tw_id == "Not Provided": tw_id = "Not Provided"
                         
                         gps_hours = biz.get("operating_hours", {})
                         hours_string = " | ".join([f"{day.capitalize()}: {t}" for day, t in gps_hours.items()]) if (isinstance(gps_hours, dict) and gps_hours) else "Not Provided"
@@ -266,8 +237,8 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
                             "Complete Address": full_address, "Operating Hours Matrix": hours_string, 
                             "Website Link": website_link, "Email ID": email_id,
                             "Phone Number": biz.get("phone") or "Not Provided",
-                            "Facebook Handle": fb_id, "Instagram Handle": ig_id,
-                            "LinkedIn Handle": li_id, "Twitter/X Handle": tw_id
+                            "Facebook Handle": found_metrics["Facebook"], "Instagram Handle": found_metrics["Instagram"],
+                            "LinkedIn Handle": found_metrics["LinkedIn"], "Twitter/X Handle": found_metrics["Twitter/X"]
                         }
                         filtered_leads.append(lead_card)
                 
