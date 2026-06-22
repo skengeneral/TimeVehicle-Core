@@ -9,7 +9,8 @@ from urllib.parse import urljoin, urlparse
 # Import Playwright's synchronous API
 from playwright.sync_api import sync_playwright
 
-def get_stored_api_key():
+def get_local_api_key():
+    """Maps to the identical caller inside user-input-data to avoid sandboxed execution breaks."""
     if getattr(sys, 'frozen', False):
         current_dir = Path(sys.executable).parent
     else:
@@ -21,6 +22,10 @@ def get_stored_api_key():
                 return file.read().strip()
         except: pass
     return os.environ.get("SERPAPI_KEY")
+
+def get_stored_api_key():
+    """Fallback alias link to catch legacy memory requests safely."""
+    return get_local_api_key()
 
 def extract_emails_from_text(text_content):
     """Parses text segments using clean regular expressions to harvest target emails."""
@@ -166,7 +171,7 @@ def extract_contact_metrics_from_website(playwright_instance, website_url):
     return socials
 
 def extract_local_leads(search_query, allowed_ratings, target_city=None):
-    api_key = get_stored_api_key()
+    api_key = get_local_api_key()
     if not api_key:
         print("❌ ERROR: No API key found inside your 'serp_api.txt' file.")
         return {"data": [], "columns_layout": None}
@@ -176,7 +181,7 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
     
     endpoint = "https://serpapi.com/search.json"
     current_page = 1
-    max_pages = 5                 
+    max_pages = 5                  
     results_per_page = 20
 
     print("🚀 Initializing Master Automation Scraper Engine...")
@@ -248,9 +253,6 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
                         if email_id == "Not Provided":
                             email_id = fetch_email_via_google_search(api_key, title, full_address, target_city)
                         
-                        # 🛡️ BASIC TIRED CREDIT PROTECTOR LAYER: 
-                        # Social networks remain locked to whatever the website crawl gathered. 
-                        # No programmatic Google lookups are executed, saving thousands of API credits.
                         if fb_id == "Not Provided": fb_id = "Not Provided"
                         if ig_id == "Not Provided": ig_id = "Not Provided"
                         if li_id == "Not Provided": li_id = "Not Provided"
