@@ -1,26 +1,38 @@
 import webbrowser
 import sys
 import os
-import requests  # 🚀 Used for real-time SerpApi credit metric tracking
-import scraper_engine  # 🔗 Background scraper module
-import export_engine   # 🔗 Document generation module
+import requests  # 🚀 Used for dynamic cloud loading, credit metrics & validation
 
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QCheckBox, 
-    QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QMessageBox, QScrollArea
+    QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QMessageBox, QScrollArea, QInputDialog
 )
-from PyQt6.QtCore import Qt, QPoint, QTimer
+from PyQt6.QtCore import Qt, QPoint, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QPainter, QPolygon, QColor, QCursor
+
+# 🛑 LOCAL ENGINES REMOVED TO ALLOW 100% SILENT CLOUD UPDATES
+# Instead of hard-importing, we look up the stored API key safely using local file tracking:
+def get_local_api_key():
+    if getattr(sys, 'frozen', False):
+        current_dir = os.path.dirname(sys.executable)
+    else:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+    key_file_path = os.path.join(current_dir, "serp_api.txt")
+    if os.path.exists(key_file_path):
+        try:
+            with open(key_file_path, "r", encoding="utf-8") as file:
+                return file.read().strip()
+        except: pass
+    return os.environ.get("SERPAPI_KEY")
 
 def fetch_live_serp_credits():
     """Connects directly to SerpApi to extract remaining search credits with an optimized timeout."""
-    api_key = scraper_engine.get_stored_api_key()
+    api_key = get_local_api_key()
     if not api_key:
         return "Missing Key"
     endpoint = "https://serpapi.com/account.json"
     params = {"api_key": api_key}
     try:
-        # Tightened timeout to 3 seconds so the background check finishes quickly
         response = requests.get(endpoint, params=params, timeout=3)
         if response.status_code == 200:
             account_info = response.json()
@@ -52,14 +64,50 @@ class LogoWidget(QWidget):
         painter.drawPolygon(points)
 
 
+class ScraperWorker(QThread):
+    """⚡ Dynamic Cloud Worker executing the latest online scraping logic out of RAM."""
+    finished_signal = pyqtSignal(dict)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, search_query, allowed_ratings, target_city):
+        super().__init__()
+        self.search_query = search_query
+        self.allowed_ratings = allowed_ratings
+        self.target_city = target_city
+
+    def run(self):
+        try:
+            # 🟢 DYNAMIC UPDATER LAYER: Pulls down your live code instantly
+            # Replace 'yourusername/your-repo' with your actual GitHub repository details:
+            CLOUD_SCRAPER_URL = "https://raw.githubusercontent.com/yourusername/your-repo/main/basic/scraper_engine.py"
+            response = requests.get(CLOUD_SCRAPER_URL, timeout=10)
+            
+            if response.status_code == 200:
+                scraper_code = response.text
+                
+                # Execute the live code securely in memory sandbox
+                local_scope = {}
+                exec(scraper_code, globals(), local_scope)
+                
+                # Fire the function straight from RAM
+                extraction_packet = local_scope["extract_local_leads"](
+                    search_query=self.search_query, 
+                    allowed_ratings=self.allowed_ratings,
+                    target_city=self.target_city
+                )
+                self.finished_signal.emit(extraction_packet)
+            else:
+                self.error_signal.emit(f"Could not reach update server (Code: {response.status_code})")
+        except Exception as e:
+            self.error_signal.emit(str(e))
+
+
 class TimeVehicleUI(QWidget):
     def __init__(self):
         super().__init__()
-        # 1. Provide a temporary loading placeholder so the application can load offline immediately
         self.live_credits = "Fetching Status..."
+        self.scraper_worker = None  
         self.init_ui()
-        
-        # 2. Use a single-shot timer to check credits 100ms AFTER the UI window shows up safely
         QTimer.singleShot(100, self.lazy_load_credits)
         
     def init_ui(self):
@@ -238,6 +286,7 @@ class TimeVehicleUI(QWidget):
             }
             QPushButton:hover { background-color: #004473; }
             QPushButton:pressed { background-color: #001524; }
+            QPushButton:disabled { background-color: #64748B; color: #CBD5E1; }
         """)
         self.btn_submit.clicked.connect(self.handle_submit_action)
         sheet_layout.addWidget(self.btn_submit)
@@ -247,7 +296,7 @@ class TimeVehicleUI(QWidget):
         support_frame.setStyleSheet("background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; padding: 12px;")
         support_layout = QHBoxLayout(support_frame)
         
-        lbl_support_text = QLabel("💬 Need help or customized solutions? WhatsApp us at:\n👉 +91 77803 79259")
+        lbl_support_text = QLabel("💬 Need help or customized solutions? WhatsApp us at:\n👉 +91 77803 79259\n📧 Mail us at: support@timevehicle.com")
         lbl_support_text.setFont(QFont("Arial", 10, QFont.Weight.Bold))
         lbl_support_text.setStyleSheet("color: #475569; line-height: 1.4;")
         lbl_support_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -285,15 +334,53 @@ class TimeVehicleUI(QWidget):
         self.refresh_credit_display()
         
     def lazy_load_credits(self):
-        """Asynchronously updates the credit layout indicator once the window is rendered."""
         self.live_credits = fetch_live_serp_credits()
         self.lbl_credits.setText(f"💳 Searches Remaining: {self.live_credits}")
 
     def refresh_credit_display(self):
         self.lbl_credits.setText("💳 Searches Remaining: Fetching Status...")
-        QApplication.processEvents()
         self.live_credits = fetch_live_serp_credits()
         self.lbl_credits.setText(f"💳 Searches Remaining: {self.live_credits}")
+
+    def verify_security_passkey(self):
+        csv_export_url = "https://docs.google.com/spreadsheets/d/1_mHFrZcnhupYNU2FA9B1I5DEFNerNsIwW61lX_ygPHs/export?format=csv&gid=0"
+        
+        passkey, ok = QInputDialog.getText(
+            self, 
+            "Security Verification", 
+            "Please enter your Time Vehicle Activation Passkey:",
+            QLineEdit.EchoMode.Normal
+        )
+        if not ok:
+            return False
+            
+        passkey_clean = passkey.strip()
+        if not passkey_clean:
+            QMessageBox.warning(self, "Entry Empty", "Passkey cannot be empty.")
+            return False
+            
+        try:
+            response = requests.get(csv_export_url, timeout=4)
+            if response.status_code == 200:
+                raw_text = response.text
+                active_cloud_keys = set()
+                for line in raw_text.splitlines():
+                    for segment in line.split(','):
+                        clean_token = segment.strip().replace('"', '').replace("'", "")
+                        if clean_token:
+                            active_cloud_keys.add(clean_token.lower())
+                            
+                if passkey_clean.lower() in active_cloud_keys:
+                    return True
+                else:
+                    QMessageBox.critical(self, "Verification Failure", "The passkey you entered is not authorized or has expired.")
+                    return False
+            else:
+                QMessageBox.critical(self, "Database Error", f"Could not sync with validation server. Code: {response.status_code}")
+                return False
+        except Exception as e:
+            QMessageBox.critical(self, "Network Failure", f"Could not connect to database for verification. Check internet connection.\nDetail: {str(e)}")
+            return False
 
     def handle_submit_action(self):
         profession = self.input_profession.text().strip()
@@ -318,6 +405,9 @@ class TimeVehicleUI(QWidget):
             QMessageBox.warning(self, "Missing Rating", "Please select at least one rating box or select 'ALL'.")
             return
 
+        if not self.verify_security_passkey():
+            return
+
         search_components = []
         if profession: search_components.append(profession)
         if locality:   search_components.append(locality)
@@ -330,16 +420,17 @@ class TimeVehicleUI(QWidget):
         target_location_context = ", ".join(geo_components)
         
         self.btn_submit.setEnabled(False)
-        self.btn_submit.setText("⏳ SCRAPING DATA... PLEASE WAIT")
-        QApplication.processEvents()
+        self.btn_submit.setText("⏳ DOWNLOADING DATA... PLEASE WAIT")
+        self.btn_submit.repaint()  
         
+        self.scraper_worker = ScraperWorker(clean_search_query, selected_ratings, target_location_context)
+        self.scraper_worker.finished_signal.connect(self.on_scraping_finished)
+        self.scraper_worker.error_signal.connect(self.on_scraping_error)
+        self.scraper_worker.start()
+
+    def on_scraping_finished(self, extraction_packet):
+        """Processes final compilation files once background cloud tasks finish."""
         try:
-            extraction_packet = scraper_engine.extract_local_leads(
-                search_query=clean_search_query, 
-                allowed_ratings=selected_ratings,
-                target_city=target_location_context
-            )
-            
             extracted_data = extraction_packet.get("data", [])
             active_columns_layout = extraction_packet.get("columns_layout", None)
             
@@ -349,8 +440,19 @@ class TimeVehicleUI(QWidget):
                 
             saved_file_paths = []
             if self.chk_excel.isChecked():
-                xl_path = export_engine.save_to_excel(extracted_data, active_columns_layout)
-                saved_file_paths.append(f"• Excel File Created: {xl_path}")
+                # 🟢 DYNAMIC EXPORT UPDATER LAYER: Pulls down your live export code out of RAM
+                CLOUD_EXPORT_URL = "https://raw.githubusercontent.com/yourusername/your-repo/main/basic/export_engine.py"
+                response = requests.get(CLOUD_EXPORT_URL, timeout=10)
+                
+                if response.status_code == 200:
+                    export_code = response.text
+                    local_export_scope = {}
+                    exec(export_code, globals(), local_export_scope)
+                    
+                    xl_path = local_export_scope["save_to_excel"](extracted_data, active_columns_layout)
+                    saved_file_paths.append(f"• Excel File Created: {xl_path}")
+                else:
+                    raise Exception("Could not reach export update server.")
                 
             self.refresh_credit_display()
             
@@ -362,10 +464,15 @@ class TimeVehicleUI(QWidget):
             QMessageBox.information(self, "Extraction Complete", success_summary)
             
         except Exception as e:
-            QMessageBox.critical(self, "Extraction Failure", f"An anomaly broke your live data loop: {str(e)}")
+            QMessageBox.critical(self, "Export Failure", f"Failed to save your document array: {str(e)}")
         finally:
             self.btn_submit.setEnabled(True)
             self.btn_submit.setText("SUBMIT")
+
+    def on_scraping_error(self, error_message):
+        QMessageBox.critical(self, "Extraction Failure", f"An anomaly broke your live data loop: {error_message}")
+        self.btn_submit.setEnabled(True)
+        self.btn_submit.setText("SUBMIT")
 
 
 if __name__ == "__main__":
