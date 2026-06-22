@@ -1,42 +1,109 @@
 import os
 import sys
-import requests
 import time
 import re
+import requests
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
+
+# Import Playwright's synchronous API
+from playwright.sync_api import sync_playwright
 
 def get_stored_api_key():
-    """Reads the SerpApi key from the text file right next to the executable bundle."""
     if getattr(sys, 'frozen', False):
         current_dir = Path(sys.executable).parent
-        if "Contents/MacOS" in str(current_dir):
-            current_dir = current_dir.parent.parent.parent
     else:
         current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-        
     key_file_path = current_dir / "serp_api.txt"
     if key_file_path.exists():
         try:
             with open(key_file_path, "r", encoding="utf-8") as file:
                 return file.read().strip()
-        except Exception as e:
-            print(f"⚠️ Error reading 'serp_api.txt': {str(e)}")
-            
+        except: pass
     return os.environ.get("SERPAPI_KEY")
 
-def extract_emails_from_html(html_text):
-    """Helper macro to parse and clean raw email targets from standard string text markup."""
-    email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}'
-    raw_emails = re.findall(email_pattern, html_text)
-    if raw_emails:
-        clean_emails = [e for e in raw_emails if not e.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'))]
+def extract_emails_from_text(text_content):
+    """Parses text segments using clean regular expressions to harvest target emails."""
+    if not text_content:
+        return None
+    email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}'
+    raw_emails = re.findall(email_pattern, text_content)
+    
+    mailto_emails = re.findall(r'href=["\']mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6})', text_content, re.IGNORECASE)
+    all_found = raw_emails + mailto_emails
+    
+    if all_found:
+        clean_emails = []
+        for e in all_found:
+            e_lower = e.lower()
+            garbage_keywords = ['sentry', 'wixpress', 'example', 'yourdomain', 'template', 'email', 'domain', 'magicpin', 'baidyanath', 'dfat.gov']
+            asset_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.css', '.js', '.html')
+            
+            if not e_lower.endswith(asset_extensions):
+                if not any(bad_word in e_lower for bad_word in garbage_keywords):
+                    clean_emails.append(e_lower)
         if clean_emails:
-            return clean_emails[0].lower()
+            clean_emails.sort(key=len)
+            return clean_emails[0]
     return None
 
-def extract_contact_metrics_from_website(website_url):
-    """Scans the home page AND primary contact links of a business to catch hidden email IDs."""
+def fetch_email_via_google_search(api_key, business_name, full_address=None, target_city=None):
+    """Executes a multi-stage search fallback using both the live address and dashboard entries."""
+    endpoint = "https://serpapi.com/search.json"
+    
+    # Strategy A: Try building a hyper-targeted query using the exact address
+    geo_tail = ""
+    if full_address and full_address != "Not Provided":
+        address_parts = [p.strip() for p in full_address.split(',')]
+        if len(address_parts) >= 2:
+            geo_tail = f"{address_parts[-2]}, {address_parts[-1]}"
+            
+    # Strategy B: Fallback to whatever the user typed in the dashboard fields if address parsing is thin
+    if not geo_tail and target_city:
+        geo_tail = target_city.strip()
+        
+    if not geo_tail:
+        geo_tail = "USA"
+        
+    search_query = f"{business_name}, {geo_tail} email id"
+    print(f"🔍 Executing Smart Fallback Search: '{search_query}'...")
+    
+    params = {"engine": "google", "q": search_query, "api_key": api_key}
+    try:
+        response = requests.get(endpoint, params=params, timeout=15)
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Check AI Overview / Answer Box first
+            answer_box = data.get("answer_box", {})
+            answer_text = str(answer_box.get("answer") or answer_box.get("snippet") or "")
+            found = extract_emails_from_text(answer_text)
+            if found: return found
+                
+            # Check regular organic snippet summaries second
+            organic_results = data.get("organic_results", [])
+            for result in organic_results[:4]:
+                found = extract_emails_from_text(result.get("snippet", ""))
+                if found: return found
+    except: pass
+    return "Not Provided"
+
+def scrape_page_with_browser(browser_context, target_url):
+    try:
+        page = browser_context.new_page()
+        page.set_viewport_size({"width": 1280, "height": 800})
+        response = page.goto(target_url, timeout=12000, wait_until="load")
+        if not response or response.status != 200:
+            page.close()
+            return None
+        time.sleep(1)
+        rendered_content = page.content()
+        page.close()
+        return rendered_content
+    except:
+        return None
+
+def extract_contact_metrics_from_website(playwright_instance, website_url):
     socials = {
         "Facebook": "Not Provided", "Instagram": "Not Provided", 
         "LinkedIn": "Not Provided", "Twitter/X": "Not Provided",
@@ -45,162 +112,169 @@ def extract_contact_metrics_from_website(website_url):
     if not website_url or "No Website" in website_url or not website_url.startswith("http"):
         return socials
         
+    if website_url.startswith("http://"):
+        website_url = website_url.replace("http://", "https://", 1)
+        
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        response = requests.get(website_url, headers=headers, timeout=5)
-        if response.status_code != 200:
+        browser = playwright_instance.chromium.launch(headless=True, channel="chrome")
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
+        homepage_html = scrape_page_with_browser(context, website_url)
+        if not homepage_html:
+            browser.close()
             return socials
             
-        html_content = response.text
-        
-        # 1. Look for email on the primary homepage first
-        found_email = extract_emails_from_html(html_content)
-        if found_email:
-            socials["Email ID"] = found_email
+        found_email = extract_emails_from_text(homepage_html)
+        if found_email: socials["Email ID"] = found_email
             
-        # 2. Extract Social media anchors from homepage
-        fb_match = re.search(r'href=["\'](https?://(?:www\.)?facebook\.com/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
-        ig_match = re.search(r'href=["\'](https?://(?:www\.)?instagram\.com/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
-        li_match = re.search(r'href=["\'](https?://(?:www\.)?linkedin\.com/(?:in|company)/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
-        tw_match = re.search(r'href=["\'](https?://(?:www\.)?(?:twitter|x)\.com/[a-zA-Z0-9_\-\.]+)/?["\']', html_content, re.IGNORECASE)
+        fb_match = re.search(r'href=["\'](https?://(?:www\.)?facebook\.com/[a-zA-Z0-9_\-\.]+)/?["\']', homepage_html, re.IGNORECASE)
+        ig_match = re.search(r'href=["\'](https?://(?:www\.)?instagram\.com/[a-zA-Z0-9_\-\.]+)/?["\']', homepage_html, re.IGNORECASE)
+        li_match = re.search(r'href=["\'](https?://(?:www\.)?linkedin\.com/(?:in|company)/[a-zA-Z0-9_\-\.]+)/?["\']', homepage_html, re.IGNORECASE)
+        tw_match = re.search(r'href=["\'](https?://(?:www\.)?(?:twitter|x)\.com/[a-zA-Z0-9_\-\.]+)/?["\']', homepage_html, re.IGNORECASE)
         
         if fb_match: socials["Facebook"] = fb_match.group(1)
         if ig_match: socials["Instagram"] = ig_match.group(1)
         if li_match: socials["LinkedIn"] = li_match.group(1)
         if tw_match: socials["Twitter/X"] = tw_match.group(1)
         
-        # 3. DEEP CRAWLER: If no email was found on homepage, search for secondary contact pages
         if socials["Email ID"] == "Not Provided":
-            # Match internal links pointing to Contact, About, or Registration pages
-            contact_links = re.findall(r'href=["\']([^"\']*(?:contact|about|register|info|reach)[^"\']*)["\']', html_content, re.IGNORECASE)
+            contact_links = set()
+            raw_links = re.findall(r'href\s*=\s*["\']([^"\']+)["\']', homepage_html, re.IGNORECASE)
+            for link in raw_links:
+                if any(k in link.lower() for k in ['contact', 'about', 'register', 'info', 'reach']):
+                    contact_links.add(link)
+            parsed_base = urlparse(website_url)
+            base_domain = f"{parsed_base.scheme}://{parsed_base.netloc}"
             
-            # Filter and scan the unique contact sub-pages found
+            if len(contact_links) == 0:
+                for route in ['/contact-us', '/contact', '/about-us', '/about']:
+                    contact_links.add(route)
             processed_subpages = set()
             for link in contact_links:
-                # Resolve relative URLs (e.g. "/contact-us" becomes "https://site.com/contact-us")
-                full_subpage_url = urljoin(website_url, link)
-                
-                # Stay on the same root website domain for safety
-                if full_subpage_url.startswith(website_url) and full_subpage_url not in processed_subpages:
+                full_subpage_url = urljoin(website_url, link) if (link.startswith('/') or link.startswith('http')) else f"{base_domain.rstrip('/')}/{link.lstrip('/')}"
+                if base_domain in full_subpage_url and full_subpage_url not in processed_subpages:
                     processed_subpages.add(full_subpage_url)
-                    try:
-                        sub_resp = requests.get(full_subpage_url, headers=headers, timeout=4)
-                        if sub_resp.status_code == 200:
-                            sub_email = extract_emails_from_html(sub_resp.text)
-                            if sub_email:
-                                socials["Email ID"] = sub_email
-                                break # Found it! Stop crawling further sub-pages
-                    except:
-                        continue
-                        
-    except:
-        pass
+                    subpage_html = scrape_page_with_browser(context, full_subpage_url)
+                    if subpage_html:
+                        sub_email = extract_emails_from_text(subpage_html)
+                        if sub_email:
+                            socials["Email ID"] = sub_email
+                            break
+        browser.close()
+    except: pass
     return socials
 
 def extract_local_leads(search_query, allowed_ratings, target_city=None):
-    """Queries SerpApi Google Maps utilizing rules that can be entirely edited over the air on GitHub."""
     api_key = get_stored_api_key()
     if not api_key:
         print("❌ ERROR: No API key found inside your 'serp_api.txt' file.")
         return {"data": [], "columns_layout": None}
         
     filtered_leads = []
+    processed_titles = set()
+    
     endpoint = "https://serpapi.com/search.json"
     current_page = 1
     max_pages = 5                 
-    live_columns_layout = None    
     results_per_page = 20
 
-    print("🚀 Initializing Master Dynamic Scraper Engine...")
+    print("🚀 Initializing Master Automation Scraper Engine...")
 
-    while current_page <= max_pages:
-        start_offset = (current_page - 1) * results_per_page
-        full_search_string = search_query
-        if target_city and target_city.strip():
-            full_search_string = f"{search_query}, {target_city.strip()}"
-            
-        params = {
-            "engine": "google_maps",
-            "q": full_search_string,
-            "type": "search",
-            "api_key": api_key,
-            "start": start_offset
-        }
+    with sync_playwright() as p:
+        while current_page <= max_pages:
+            start_offset = (current_page - 1) * results_per_page
+            full_search_string = search_query
+            if target_city and target_city.strip():
+                full_search_string = f"{search_query}, {target_city.strip()}"
+                
+            params = {
+                "engine": "google_maps",
+                "q": full_search_string,
+                "type": "search",
+                "api_key": api_key,
+                "start": start_offset
+            }
 
-        print(f"📄 Scraping Page {current_page} of {max_pages} (Record Offset: {start_offset})...")
-        
-        try:
-            response = requests.get(endpoint, params=params, timeout=20)
-            if response.status_code != 200:
-                print(f"⚠️ Server returned error status: {response.status_code}. Breaking loop.")
-                break
-                
-            data = response.json()
-            raw_results = data.get("local_results", [])
-            if not raw_results:
-                print("🏁 No additional local entries returned from Google Maps data pools.")
-                break
-                
-            for biz in raw_results:
-                title = biz.get("title") or biz.get("name") or "Unknown Firm"
-                raw_rating = biz.get("rating", 0)
-                try: rating_val = float(raw_rating)
-                except: rating_val = 0.0
-                
-                rating_matches = False
-                if "ALL" in allowed_ratings:
-                    rating_matches = True
-                else:
-                    for selected_rate in allowed_ratings:
-                        try:
-                            target_int = int(selected_rate)
-                            if target_int == 5 and rating_val == 5.0:
-                                rating_matches = True
-                                break
-                            elif target_int <= rating_val < (target_int + 1):
-                                rating_matches = True
-                                break
-                        except ValueError: continue
-                
-                if rating_matches:
-                    full_address = biz.get("address", "") or "Not Provided"
-                    website_link = biz.get("website") or "No Website"
+            print(f"\n📄 Scraping Page {current_page} of {max_pages}...")
+            try:
+                response = requests.get(endpoint, params=params, timeout=20)
+                if response.status_code != 200: break
                     
-                    found_metrics = extract_contact_metrics_from_website(website_link)
+                data = response.json()
+                raw_results = data.get("local_results", [])
+                if not raw_results: break
                     
-                    gps_hours = biz.get("operating_hours", {})
-                    hours_string = "Not Provided"
-                    if isinstance(gps_hours, dict) and gps_hours:
-                        hours_string = " | ".join([f"{day.capitalize()}: {time_str}" for day, time_str in gps_hours.items()])
+                for biz in raw_results:
+                    title = biz.get("title") or biz.get("name") or "Unknown Firm"
                     
-                    lead_card = {
-                        "Business Name": title, 
-                        "Google Rating": rating_val, 
-                        "Complete Address": full_address,
-                        "Operating Hours Matrix": hours_string, 
-                        "Website Link": website_link,
-                        "Email ID": found_metrics["Email ID"],
-                        "Phone Number": biz.get("phone") or "Not Provided",
-                        "Facebook Handle": found_metrics["Facebook"], 
-                        "Instagram Handle": found_metrics["Instagram"],
-                        "LinkedIn Handle": found_metrics["LinkedIn"], 
-                        "Twitter/X Handle": found_metrics["Twitter/X"]
-                    }
-                    filtered_leads.append(lead_card)
-            
-            serp_pagination = data.get("serpapi_pagination", {})
-            has_next_indicator = ("next" in serp_pagination or "next_page_token" in serp_pagination or "next_page_token" in data)
-            
-            if not has_next_indicator:
-                print("🏁 Google Maps indicates no more pages exist for this keyword framework.")
-                break
+                    if title.lower().strip() in processed_titles:
+                        continue
+                        
+                    raw_rating = biz.get("rating", 0)
+                    try: rating_val = float(raw_rating)
+                    except: rating_val = 0.0
+                    
+                    rating_matches = False
+                    if "ALL" in allowed_ratings:
+                        rating_matches = True
+                    else:
+                        for selected_rate in allowed_ratings:
+                            try:
+                                target_int = int(selected_rate)
+                                if target_int == 5 and rating_val == 5.0:
+                                    rating_matches = True
+                                    break
+                                elif target_int <= rating_val < (target_int + 1):
+                                    rating_matches = True
+                                    break
+                            except ValueError: continue
+                    
+                    if rating_matches:
+                        processed_titles.add(title.lower().strip())
+                        website_link = biz.get("website") or "No Website"
+                        full_address = biz.get("address", "") or "Not Provided"
+                        
+                        # Step 1: Standard website browser crawl
+                        found_metrics = extract_contact_metrics_from_website(p, website_link)
+                        
+                        email_id = found_metrics["Email ID"]
+                        fb_id = found_metrics["Facebook"]
+                        ig_id = found_metrics["Instagram"]
+                        li_id = found_metrics["LinkedIn"]
+                        tw_id = found_metrics["Twitter/X"]
+                        
+                        # Step 2: Multi-Layer Google Search Fallback Engine for Email ONLY
+                        if email_id == "Not Provided":
+                            email_id = fetch_email_via_google_search(api_key, title, full_address, target_city)
+                        
+                        # 🛡️ BASIC TIRED CREDIT PROTECTOR LAYER: 
+                        # Social networks remain locked to whatever the website crawl gathered. 
+                        # No programmatic Google lookups are executed, saving thousands of API credits.
+                        if fb_id == "Not Provided": fb_id = "Not Provided"
+                        if ig_id == "Not Provided": ig_id = "Not Provided"
+                        if li_id == "Not Provided": li_id = "Not Provided"
+                        if tw_id == "Not Provided": tw_id = "Not Provided"
+                        
+                        gps_hours = biz.get("operating_hours", {})
+                        hours_string = " | ".join([f"{day.capitalize()}: {t}" for day, t in gps_hours.items()]) if (isinstance(gps_hours, dict) and gps_hours) else "Not Provided"
+                        
+                        lead_card = {
+                            "Business Name": title, "Google Rating": rating_val, 
+                            "Complete Address": full_address, "Operating Hours Matrix": hours_string, 
+                            "Website Link": website_link, "Email ID": email_id,
+                            "Phone Number": biz.get("phone") or "Not Provided",
+                            "Facebook Handle": fb_id, "Instagram Handle": ig_id,
+                            "LinkedIn Handle": li_id, "Twitter/X Handle": tw_id
+                        }
+                        filtered_leads.append(lead_card)
                 
-            current_page += 1
-            time.sleep(1.2)
-            
-        except Exception as e:
-            print(f"❌ Extraction anomaly: {str(e)}")
-            break
+                serp_pagination = data.get("serpapi_pagination", {})
+                if "next" not in serp_pagination: break
+                current_page += 1
+                time.sleep(1)
+            except Exception as e:
+                print(f"❌ Error: {str(e)}")
+                break
 
-    print(f"🎉 Complete! Successfully extracted {len(filtered_leads)} leads.")
-    return {"data": filtered_leads, "columns_layout": live_columns_layout}
+    return {"data": filtered_leads, "columns_layout": None}
