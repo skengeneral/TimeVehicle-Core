@@ -8,10 +8,9 @@ from PyQt6.QtWidgets import (
     QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QMessageBox, QScrollArea, QInputDialog
 )
 from PyQt6.QtCore import Qt, QPoint, QTimer, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QPainter, QPolygon, QColor, QCursor
+from PyQt6.QtGui import QFont, QPainter, QPolygon, QColor, QCursor, QIcon
 
 # 🛑 LOCAL ENGINES REMOVED TO ALLOW 100% SILENT CLOUD UPDATES
-# Instead of hard-importing, we look up the stored API key safely using local file tracking:
 def get_local_api_key():
     if getattr(sys, 'frozen', False):
         current_dir = os.path.dirname(sys.executable)
@@ -77,9 +76,8 @@ class ScraperWorker(QThread):
 
     def run(self):
         try:
-            # 🟢 DYNAMIC UPDATER LAYER: Pulls down your live code instantly
-            # Replace 'yourusername/your-repo' with your actual GitHub repository details:
-            CLOUD_SCRAPER_URL = "https://raw.githubusercontent.com/yourusername/your-repo/main/basic/scraper_engine.py"
+            # 🟢 TARGETING ROOT LANDING PAGE AS CONFIRMED LIVE
+            CLOUD_SCRAPER_URL = "https://raw.githubusercontent.com/skengeneral/TimeVehicle-basic/main/scraper_engine.py"
             response = requests.get(CLOUD_SCRAPER_URL, timeout=10)
             
             if response.status_code == 200:
@@ -112,6 +110,16 @@ class TimeVehicleUI(QWidget):
         
     def init_ui(self):
         self.setWindowTitle("Time vehicle - 1.0")
+        
+        # 🎨 RUNTIME LOGO INJECTION: Sets matching taskbar & title icon profiles
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+        icon_path = os.path.join(base_dir, "timevehicle.ico")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+
         self.setMinimumSize(440, 600)  
         self.resize(480, 680)          
         self.setStyleSheet("background-color: #FFFFFF;")
@@ -440,8 +448,8 @@ class TimeVehicleUI(QWidget):
                 
             saved_file_paths = []
             if self.chk_excel.isChecked():
-                # 🟢 DYNAMIC EXPORT UPDATER LAYER: Pulls down your live export code out of RAM
-                CLOUD_EXPORT_URL = "https://raw.githubusercontent.com/yourusername/your-repo/main/basic/export_engine.py"
+                # 🟢 FIXED: REMOVED '/basic/' TO MATCH ROOT LANDING PATHWAY 
+                CLOUD_EXPORT_URL = "https://raw.githubusercontent.com/skengeneral/TimeVehicle-basic/main/export_engine.py"
                 response = requests.get(CLOUD_EXPORT_URL, timeout=10)
                 
                 if response.status_code == 200:
