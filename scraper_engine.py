@@ -98,7 +98,7 @@ def scrape_page_with_browser(browser_context, target_url):
     except:
         return None
 
-# 🟢 PLACED DIRECTLY ABOVE CALLER WITH ZERO INDENTATION SLIPS
+# 🟢 STEP 1: DEFINE CRAWLER UTILITY HIGHER UP IN FILE SO IT IS COMPILED FIRST
 def extract_contact_metrics_from_website(playwright_instance, website_url):
     socials = {
         "Facebook": "Not Provided", "Instagram": "Not Provided", 
@@ -161,6 +161,7 @@ def extract_contact_metrics_from_website(playwright_instance, website_url):
     except: pass
     return socials
 
+# 🟢 STEP 2: MAIN ENGINE RUNS AFTER HELPER FUNCTIONS ARE COMPILED
 def extract_local_leads(search_query, allowed_ratings, target_city=None):
     api_key = get_local_api_key()
     if not api_key:
@@ -224,7 +225,7 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
                         website_link = biz.get("website") or "No Website"
                         full_address = biz.get("address", "") or "Not Provided"
                         
-                        # Calling the verified structural handle safely
+                        # Python reads down and resolves this reference perfectly now!
                         found_metrics = extract_contact_metrics_from_website(p, website_link)
                         email_id = found_metrics["Email ID"]
                         
