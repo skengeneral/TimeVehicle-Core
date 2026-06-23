@@ -202,24 +202,22 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
                     if title.lower().strip() in processed_titles: continue
                     
                     # 🚀 DYNAMIC SMART FILTER
-                    # Break the search query into individual words (ignoring short ones)
-                   # Updated snippet for your scraper_engine.py
-# Remove location words if present to keep the filter focused on the business type
-search_terms = [t.lower() for t in search_query.split() if len(t) > 2]
-# Filter out common location-based words that might be in the query
-exclude_words = ['nagole', 'india', 'city', 'town', 'area']
-search_terms = [t for t in search_terms if t not in exclude_words]
+                    search_terms = [t.lower() for t in search_query.split() if len(t) > 2]
+                    exclude_words = ['nagole', 'india', 'city', 'town', 'area']
+                    search_terms = [t for t in search_terms if t not in exclude_words]
 
-if search_terms and not any(term in title.lower() for term in search_terms):
-    print(f"Skipping unrelated result: {title}")
-    continue
+                    if search_terms and not any(term in title.lower() for term in search_terms):
+                        print(f"Skipping unrelated result: {title}")
+                        continue
                     
                     raw_rating = biz.get("rating", 0)
-                    # ... (rest of your existing logic remains exactly the same)
-                    try: rating_val = float(raw_rating)
-                    except: rating_val = 0.0
+                    try: 
+                        rating_val = float(raw_rating)
+                    except: 
+                        rating_val = 0.0
                     
                     rating_matches = False
+                    # ... (rest of your existing logic continues here at this same indentation level)
                     if "ALL" in allowed_ratings:
                         rating_matches = True
                     else:
