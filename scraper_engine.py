@@ -198,20 +198,23 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
                 if not raw_results: break
                     
                 for biz in raw_results:
-                title = biz.get("title") or biz.get("name") or "Unknown Firm"
-                if title.lower().strip() in processed_titles: continue
-                
-                # 🚀 DYNAMIC SMART FILTER
-                search_terms = [t.lower() for t in search_query.split() if len(t) > 2]
-                exclude_words = ['nagole', 'india', 'city', 'town', 'area']
-                search_terms = [t for t in search_terms if t not in exclude_words]
+                    # Everything from here down must be indented 20 spaces
+                    title = biz.get("title") or biz.get("name") or "Unknown Firm"
+                    if title.lower().strip() in processed_titles: continue
+                    
+                    # 🚀 DYNAMIC SMART FILTER
+                    search_terms = [t.lower() for t in search_query.split() if len(t) > 2]
+                    exclude_words = ['nagole', 'india', 'city', 'town', 'area']
+                    search_terms = [t for t in search_terms if t not in exclude_words]
 
-                if search_terms and not any(term in title.lower() for term in search_terms):
-                    continue
-                
-                # 1. Rating Logic
-                try: rating_val = float(biz.get("rating", 0))
-                except: rating_val = 0.0
+                    if search_terms and not any(term in title.lower() for term in search_terms):
+                        continue
+                        
+                    # Everything else also needs to be indented
+                    try: rating_val = float(biz.get("rating", 0))
+                    except: rating_val = 0.0
+                    
+                    # ... rest of your code ...
                 
                 rating_matches = False
                 if "ALL" in allowed_ratings:
