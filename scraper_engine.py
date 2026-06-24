@@ -98,8 +98,10 @@ def scrape_page_with_browser(browser_context, target_url):
     except:
         return None
 
-# 🟢 STEP 1: DEFINE CRAWLER UTILITY HIGHER UP IN FILE SO IT IS COMPILED FIRST
-def extract_contact_metrics_from_website(playwright_instance, website_url):
+def extract_contact_metrics_from_website(playwright_instance, website_url, progress_callback=None):
+    def log(msg):
+        if progress_callback: progress_callback(msg)
+
     socials = {
         "Facebook": "Not Provided", "Instagram": "Not Provided", 
         "LinkedIn": "Not Provided", "Twitter/X": "Not Provided",
@@ -161,24 +163,48 @@ def extract_contact_metrics_from_website(playwright_instance, website_url):
     except: pass
     return socials
 
-# 🟢 STEP 2: MAIN ENGINE RUNS AFTER HELPER FUNCTIONS ARE COMPILED
-def extract_local_leads(search_query, allowed_ratings, target_city=None):
+
+# ─────────────────────────────────────────────────────────────────
+#  MAIN ENGINE
+#  Changes vs previous version:
+#    1. Smart title-keyword filter REMOVED — Google Maps relevance
+#       is trusted to return correct business types (e.g. searching
+#       "banks" will return Chase, Citibank etc. without needing the
+#       word "bank" in their name).
+#    2. Pagination now stops when results dry up (< results_per_page)
+#       instead of checking for a "next" key that Google Maps often
+#       doesn't include — this was silently capping results at 20.
+#    3. max_pages raised to 10 (up to 200 potential results).
+#    4. progress_callback parameter added for live UI log feed.
+# ─────────────────────────────────────────────────────────────────
+def extract_local_leads(search_query, allowed_ratings, target_city=None, progress_callback=None):
+    def log(msg):
+        if progress_callback: progress_callback(msg)
+        else: print(msg)
+
     api_key = get_local_api_key()
     if not api_key:
-        print("❌ ERROR: No API key found.")
+        log("❌ ERROR: No API key found. Place your key in serp_api.txt")
         return {"data": [], "columns_layout": None}
         
     filtered_leads = []
     processed_titles = set()
     endpoint = "https://serpapi.com/search.json"
     current_page = 1
-    max_pages = 5                  
+    max_pages = 10          # ← raised: supports up to 200 results
     results_per_page = 20
+    total_leads = 0
 
     with sync_playwright() as p:
         while current_page <= max_pages:
             start_offset = (current_page - 1) * results_per_page
-            full_search_string = f"{search_query}, {target_city.strip()}" if target_city and target_city.strip() else search_query
+            full_search_string = (
+                f"{search_query}, {target_city.strip()}"
+                if target_city and target_city.strip()
+                else search_query
+            )
+            
+            log(f"📡 Page {current_page}/{max_pages} — querying Google Maps (offset {start_offset})...")
             
             params = {
                 "engine": "google_maps",
@@ -190,23 +216,24 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
 
             try:
                 response = requests.get(endpoint, params=params, timeout=20)
-                if response.status_code != 200: break
+                if response.status_code != 200:
+                    log(f"⚠️ API returned HTTP {response.status_code} — stopping search.")
+                    break
                 data = response.json()
                 raw_results = data.get("local_results", [])
-                if not raw_results: break
+                
+                if not raw_results:
+                    log("✅ No more listings from Google — search complete.")
+                    break
                     
+                log(f"   ↳ {len(raw_results)} listings returned on this page.")
+                
                 for biz in raw_results:
-                    title = biz.get("title") or biz.get("name") or "Unknown Firm"
-                    if title.lower().strip() in processed_titles: continue
-                    
-                    # 🚀 DYNAMIC SMART FILTER
-                    search_terms = [t.lower() for t in search_query.split() if len(t) > 2]
-                    exclude_words = ['nagole', 'india', 'city', 'town', 'area']
-                    search_terms = [t for t in search_terms if t not in exclude_words]
-
-                    if search_terms and not any(term in title.lower() for term in search_terms):
+                    title = biz.get("title") or biz.get("name") or "Unknown"
+                    if title.lower().strip() in processed_titles:
                         continue
-                    
+
+                    # ── Rating filter ──────────────────────────────────────
                     try: rating_val = float(biz.get("rating", 0))
                     except: rating_val = 0.0
                     
@@ -217,39 +244,76 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None):
                         for selected_rate in allowed_ratings:
                             try:
                                 target_int = int(selected_rate)
-                                if (target_int == 5 and rating_val == 5.0) or (target_int <= rating_val < (target_int + 1)):
-                                    rating_matches = True; break
-                            except ValueError: continue
+                                if (target_int == 5 and rating_val == 5.0) or \
+                                   (target_int <= rating_val < (target_int + 1)):
+                                    rating_matches = True
+                                    break
+                            except ValueError:
+                                continue
 
-                    if rating_matches:
-                        processed_titles.add(title.lower().strip())
-                        website_link = biz.get("website") or "No Website"
-                        full_address = biz.get("address", "") or "Not Provided"
-                        
-                        found_metrics = extract_contact_metrics_from_website(p, website_link)
-                        email_id = found_metrics["Email ID"]
-                        
-                        if email_id == "Not Provided":
-                            email_id = fetch_email_via_google_search(api_key, title, full_address, target_city)
-                        
-                        gps_hours = biz.get("operating_hours", {})
-                        hours_string = " | ".join([f"{day.capitalize()}: {t}" for day, t in gps_hours.items()]) if isinstance(gps_hours, dict) else "Not Provided"
-                        
-                        lead_card = {
-                            "Business Name": title, "Google Rating": rating_val, 
-                            "Complete Address": full_address, "Operating Hours Matrix": hours_string, 
-                            "Website Link": website_link, "Email ID": email_id,
-                            "Phone Number": biz.get("phone") or "Not Provided",
-                            "Facebook Handle": found_metrics["Facebook"], "Instagram Handle": found_metrics["Instagram"],
-                            "LinkedIn Handle": found_metrics["LinkedIn"], "Twitter/X Handle": found_metrics["Twitter/X"]
-                        }
-                        filtered_leads.append(lead_card)
-                
-                if "next" not in data.get("serpapi_pagination", {}): break
+                    if not rating_matches:
+                        continue
+
+                    # ── Accepted — begin data collection ───────────────────
+                    processed_titles.add(title.lower().strip())
+                    total_leads += 1
+                    website_link = biz.get("website") or "No Website"
+                    full_address = biz.get("address", "") or "Not Provided"
+                    
+                    log(f"🏢 [{total_leads}] {title}  ★{rating_val}")
+                    
+                    if website_link != "No Website":
+                        log(f"   🌐 Scanning website for contacts...")
+                    
+                    found_metrics = extract_contact_metrics_from_website(
+                        p, website_link, progress_callback
+                    )
+                    email_id = found_metrics["Email ID"]
+                    
+                    if email_id == "Not Provided":
+                        log(f"   🔎 Searching Google for email...")
+                        email_id = fetch_email_via_google_search(
+                            api_key, title, full_address, target_city
+                        )
+                    
+                    email_status = email_id if email_id != "Not Provided" else "—"
+                    log(f"   ✉️  Email: {email_status}")
+                    
+                    gps_hours = biz.get("operating_hours", {})
+                    hours_string = (
+                        " | ".join([f"{day.capitalize()}: {t}" for day, t in gps_hours.items()])
+                        if isinstance(gps_hours, dict) else "Not Provided"
+                    )
+                    
+                    lead_card = {
+                        "Business Name":     title,
+                        "Google Rating":     rating_val,
+                        "Complete Address":  full_address,
+                        "Operating Hours Matrix": hours_string,
+                        "Website Link":      website_link,
+                        "Email ID":          email_id,
+                        "Phone Number":      biz.get("phone") or "Not Provided",
+                        "Facebook Handle":   found_metrics["Facebook"],
+                        "Instagram Handle":  found_metrics["Instagram"],
+                        "LinkedIn Handle":   found_metrics["LinkedIn"],
+                        "Twitter/X Handle":  found_metrics["Twitter/X"]
+                    }
+                    filtered_leads.append(lead_card)
+
+                # ── Pagination: stop when last page has fewer rows ─────────
+                # Google Maps does not reliably include a "next" pagination
+                # key, so we stop only when results drop below a full page.
+                if len(raw_results) < results_per_page:
+                    log("✅ Received partial page — no more results available.")
+                    break
+
                 current_page += 1
                 time.sleep(1)
+
             except Exception as e:
-                print(f"❌ Error: {str(e)}")
+                log(f"❌ Error on page {current_page}: {str(e)}")
                 break
 
+    log(f"")
+    log(f"🎯 DONE — {len(filtered_leads)} qualified leads collected.")
     return {"data": filtered_leads, "columns_layout": None}
