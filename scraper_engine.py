@@ -51,47 +51,90 @@ def extract_emails_from_text(text_content):
     return None
 
 def fetch_email_via_google_search(api_key, business_name, full_address=None, target_city=None):
+    """
+    Deep email search using Google via SerpAPI.
+
+    Query format follows the user-discovered pattern that triggers Google
+    AI Overview:  "Business Name, City - email id"
+
+    Two attempts are made before giving up:
+      Attempt 1 — AI-optimised format:  "{name}, {city} - email id"
+      Attempt 2 — Contact-page format:  "{name} {city} official contact email"
+
+    Attempt 2 only runs when Attempt 1 finds nothing, so the extra API
+    credit is only spent on businesses with genuinely hard-to-find emails.
+
+    Every SerpAPI response field is checked:
+      ai_overview → answer_box → knowledge_graph → organic snippets
+    """
     endpoint = "https://serpapi.com/search.json"
-    geo_tail = ""
-    if full_address and full_address != "Not Provided":
-        address_parts = [p.strip() for p in full_address.split(',')]
-        if len(address_parts) >= 2:
-            geo_tail = f"{address_parts[-2]}, {address_parts[-1]}"
-            
-    if not geo_tail and target_city:
-        geo_tail = target_city.strip()
-        
-    if not geo_tail:
-        geo_tail = "USA"
-        
-    search_query = f"{business_name}, {geo_tail} email id"
-    
-    params = {"engine": "google", "q": search_query, "api_key": api_key}
-    try:
-        response = requests.get(endpoint, params=params, timeout=15)
-        if response.status_code == 200:
-            data = response.json()
-            answer_box = data.get("answer_box", {})
-            answer_text = str(answer_box.get("answer") or answer_box.get("snippet") or "")
-            found = extract_emails_from_text(answer_text)
-            if found: return found
 
-            # ── Knowledge graph: this is where Google AI Overview results
-            #    surface in the SerpAPI response — catches emails that
-            #    appear in AI mode but not in plain search snippets.
-            knowledge_graph = data.get("knowledge_graph", {})
-            found = extract_emails_from_text(str(knowledge_graph))
-            if found: return found
+    # ── Extract just the city name ─────────────────────────────────
+    # target_city arrives as e.g. "Ottawa, Ontario, Canada" or "New York, NY, USA"
+    # We want only the first segment: "Ottawa" / "New York"
+    city_only = ""
+    if target_city:
+        city_only = target_city.split(',')[0].strip()
+    if not city_only and full_address and full_address != "Not Provided":
+        parts = [p.strip() for p in full_address.split(',')]
+        # City sits roughly third-from-end in most address formats
+        city_only = parts[-3] if len(parts) >= 3 else (parts[0] if parts else "")
+    if not city_only:
+        city_only = "USA"
 
-            organic_results = data.get("organic_results", [])
-            for result in organic_results[:4]:
-                # Also check rich_snippet data alongside the plain snippet
-                rich = str(result.get("rich_snippet", ""))
-                combined_text = result.get("snippet", "") + " " + rich
-                found = extract_emails_from_text(combined_text)
+    def _search_and_extract(query):
+        """Run one SerpAPI Google search and scan every result field for an email."""
+        params = {"engine": "google", "q": query, "api_key": api_key}
+        try:
+            resp = requests.get(endpoint, params=params, timeout=15)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+
+            # 1. Google AI Overview — where AI-mode answers surface
+            ai_overview = data.get("ai_overview", {})
+            if ai_overview:
+                found = extract_emails_from_text(str(ai_overview))
                 if found: return found
-    except: pass
+
+            # 2. Answer box (featured snippets, direct answers)
+            answer_box = data.get("answer_box", {})
+            ab_text = str(answer_box.get("answer") or answer_box.get("snippet") or "")
+            found = extract_emails_from_text(ab_text)
+            if found: return found
+
+            # 3. Knowledge graph (business panels)
+            found = extract_emails_from_text(str(data.get("knowledge_graph", {})))
+            if found: return found
+
+            # 4. Organic result snippets + rich snippets
+            for result in data.get("organic_results", [])[:5]:
+                combined = (
+                    result.get("snippet", "") + " " +
+                    str(result.get("rich_snippet", "")) + " " +
+                    str(result.get("sitelinks", ""))
+                )
+                found = extract_emails_from_text(combined)
+                if found: return found
+
+        except Exception:
+            pass
+        return None
+
+    # ── Attempt 1: AI-mode optimised query (user-specified format) ─
+    query_1 = f"{business_name}, {city_only} - email id"
+    result = _search_and_extract(query_1)
+    if result:
+        return result
+
+    # ── Attempt 2: Contact-page fallback (only if Attempt 1 failed) ─
+    query_2 = f"{business_name} {city_only} official contact email"
+    result = _search_and_extract(query_2)
+    if result:
+        return result
+
     return "Not Provided"
+
 
 def scrape_page_with_browser(browser_context, target_url):
     try:
