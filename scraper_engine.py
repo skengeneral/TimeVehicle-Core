@@ -75,10 +75,20 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None, tar
             answer_text = str(answer_box.get("answer") or answer_box.get("snippet") or "")
             found = extract_emails_from_text(answer_text)
             if found: return found
-                
+
+            # ── Knowledge graph: this is where Google AI Overview results
+            #    surface in the SerpAPI response — catches emails that
+            #    appear in AI mode but not in plain search snippets.
+            knowledge_graph = data.get("knowledge_graph", {})
+            found = extract_emails_from_text(str(knowledge_graph))
+            if found: return found
+
             organic_results = data.get("organic_results", [])
             for result in organic_results[:4]:
-                found = extract_emails_from_text(result.get("snippet", ""))
+                # Also check rich_snippet data alongside the plain snippet
+                rich = str(result.get("rich_snippet", ""))
+                combined_text = result.get("snippet", "") + " " + rich
+                found = extract_emails_from_text(combined_text)
                 if found: return found
     except: pass
     return "Not Provided"
@@ -252,6 +262,29 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None, progres
                                 continue
 
                     if not rating_matches:
+                        continue
+
+                    # ── ATM Filter ─────────────────────────────────────────
+                    # Catches ATMs three ways:
+                    #   1. Name contains the word "ATM"
+                    #      e.g. "TD Bank ATM", "Santander Bank ATM"
+                    #   2. Google Maps type field is "ATM"
+                    #   3. Website URL path contains /atm- or /atm_
+                    #      e.g. Bank of America locator URLs for ATM entries
+                    #      even when the listing name says "Home Loans" etc.
+                    biz_type     = str(biz.get("type", "")).strip()
+                    biz_type_low = biz_type.lower()
+                    title_words  = set(title.lower().split())
+                    website_raw  = biz.get("website") or ""
+                    website_low  = website_raw.lower()
+
+                    if (
+                        "atm" in title_words          or   # "TD Bank ATM"
+                        "atm" in biz_type_low         or   # type: "ATM"
+                        "/atm-" in website_low        or   # /atm-new-york-104542
+                        "/atm_" in website_low             # alternate URL pattern
+                    ):
+                        log(f"⏭️  ATM skipped: {title}")
                         continue
 
                     # ── Accepted — begin data collection ───────────────────
